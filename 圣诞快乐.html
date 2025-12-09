@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>指尖魔法3D粒子交互特效</title>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1646424875/camera_utils.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Segoe UI', Arial, sans-serif;
+        }
+        
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        #canvas3d {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+        
+        #videoContainer {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 200px;
+            height: 150px;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 0 20px rgba(0, 150, 255, 0.5);
+            z-index: 2;
+            opacity: 0.7;
+            transition: opacity 0.3s;
+        }
+        
+        #videoContainer:hover {
+            opacity: 1;
+        }
+        
+        #inputVideo {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* 镜像翻转 */
+        }
+        
+        #fullscreenBtn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background-color: rgba(30, 30, 30, 0.7);
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            z-index: 3;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s;
+        }
+        
+        #fullscreenBtn:hover {
+            background-color: rgba(50, 50, 50, 0.9);
+            border-color: rgba(255, 255, 255, 0.8);
+        }
+        
+        #gestureInfo {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            font-size: 20px;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 10px 15px;
+            border-radius: 10px;
+            z-index: 2;
+            max-width: 300px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        #gestureInfo span {
+            color: #4af;
+            font-weight: bold;
+        }
+        
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <canvas id="canvas3d"></canvas>
+        
+        <div id="videoContainer">
+            <video id="inputVideo" playsinline></video>
+        </div>
+        
+        <button id="fullscreenBtn" title="全屏模式">⛶</button>
+        
+        <div id="gestureInfo">
+            手势识别: <span id="gestureText">等待摄像头启动...</span>
+        </div>
+    </div>
+
+    <script>
+        // 全局变量
+        let scene, camera, renderer;
+        let particles = [];
+        let particleSystems = [];
+        let balloons = [];
+        let flowers = [];
+        let gestureDetected = false;
+        let currentParticleNumber = 0;
+        let hands;
+        let gestureText = "";
+        
+        // 初始化Three.js场景
+        function initThreeJS() {
+            // 创建场景
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000000);
+            
+            // 创建相机
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
+            camera.position.set(0, 0, 30);
+            camera.lookAt(0, 0, 0);
+            
+            // 创建渲染器
+            renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('canvas3d'), antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            
+            // 添加光源
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(10, 20, 15);
+            scene.add(directionalLight);
+            
+            // 添加轨道控制（仅用于调试）
+            // const controls = new THREE.OrbitControls(camera, renderer.domElement);
+            // controls.enableDamping = true;
+            
+            // 监听窗口大小变化
+            window.addEventListener('resize', onWindowResize);
+        }
+        
+        // 窗口大小变化处理
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+        
+        // 创建粒子系统
+        function createParticleNumber(number) {
+            // 清除现有粒子
+            clearParticles();
+            
+            // 根据数字创建粒子文字
+            const points = [];
+            const size = 5;
+            
+            // 定义数字形状（简化版）
+            const digitShapes = {
+                1: [
+                    {x: 0, y: 2},
+                    {x: 0, y: 1},
+                    {x: 0, y: 0},
+                    {x: 0, y: -1},
+                    {x: 0, y: -2}
+                ],
+                2: [
+                    {x: -1, y: 2}, {x: 0, y: 2}, {x: 1, y: 2},
+                    {x: 1, y: 1},
+                    {x: 0, y: 0},
+                    {x: -1, y: -1},
+                    {x: -1, y: -2}, {x: 0, y: -2}, {x: 1, y: -2}
+                ],
+                3: [
+                    {x: -1, y: 2}, {x: 0, y: 2}, {x: 1, y: 2},
+                    {x: 1, y: 1},
+                    {x: 0, y: 0},
+                    {x: 1, y: -1},
+                    {x: -1, y: -2}, {x: 0, y: -2}, {x: 1, y: -2}
+                ]
+            };
+            
+            const shape = digitShapes[number];
+            if (!shape) return;
+            
+            // 根据形状创建粒子
+            for (const point of shape) {
+                const particle = createParticle(point.x * size, point.y * size, 0);
+                points.push(particle);
+            }
+            
+            // 添加动画效果
+            animateParticleFormation(points);
+            
+            currentParticleNumber = number;
+        }
+        
+        // 创建单个粒子
+        function createParticle(x, y, z) {
+            const geometry = new THREE.SphereGeometry(0.3, 16, 16);
+            const material = new THREE.MeshPhongMaterial({ 
+                color: new THREE.Color(`hsl(${Math.random() * 360}, 100%, 70%)`),
+                emissive: new THREE.Color(`hsl(${Math.random() * 360}, 100%, 30%)`),
+                emissiveIntensity: 0.5,
+                shininess: 100
+            });
+            
+            const particle = new THREE.Mesh(geometry, material);
+            particle.position.set(x, y, z);
+            particle.originalPosition = new THREE.Vector3(x, y, z);
+            particle.velocity = new THREE.Vector3(
+                (Math.random() - 0.5) * 2,
+                (Math.random() - 0.5) * 2,
+                (Math.random() - 0.5) * 2
+            );
+            
+            scene.add(particle);
+            particles.push(particle);
+            
+            return particle;
+        }
+        
+        // 粒子形成动画
+        function animateParticleFormation(particles) {
+            // 先将粒子分散
+            particles.forEach(particle => {
+                particle.position.x += (Math.random() - 0.5) * 20;
+                particle.position.y += (Math.random() - 0.5) * 20;
+                particle.position.z += (Math.random() - 0.5) * 20;
+                
+                // 添加脉冲效果
+                const scale = 0.1;
+                particle.scale.set(scale, scale, scale);
+            });
+            
+            // 动画回到原始位置
+            let startTime = Date.now();
+            
+            function animate() {
+                const elapsed = Date.now() - startTime;
+                const progress = Math.min(elapsed / 1000, 1); // 1秒动画
+                
+                particles.forEach(particle => {
+                    if (particle.originalPosition) {
+                        // 位置插值
+                        particle.position.x = THREE.MathUtils.lerp(
+                            particle.position.x,
+                            particle.originalPosition.x,
+                            0.1
+                        );
+                        particle.position.y = THREE.MathUtils.lerp(
+                            particle.position.y,
+                            particle.originalPosition.y,
+                            0.1
+                        );
+                        particle.position.z = THREE.MathUtils.lerp(
+                            particle.position.z,
+                            particle.originalPosition.z,
+                            0.1
+                        );
+                        
+                        // 缩放插值
+                        const targetScale = 1;
+                        const currentScale = particle.scale.x;
+                        const newScale = THREE.MathUtils.lerp(currentScale, targetScale, 0.1);
+                        particle.scale.set(newScale, newScale, newScale);
+                    }
+                });
+                
+                if (progress < 1) {
+                    requestAnimationFrame(animate);
+                }
+            }
+            
+            animate();
+        }
+        
+        // 创建告白特效
+        function createLoveEffect() {
+            // 清除现有粒子
+            clearParticles();
+            
+            // 创建"I ❤️ U"文字粒子
+            createLoveText();
+            
+            // 创建气球
+            createBalloons();
+            
+            // 创建鲜花
+            createFlowers();
+        }
+        
+        // 创建"I ❤️ U"文字
+        function createLoveText() {
+            // 定义"I ❤️ U"粒子位置
+            const loveText = [
+                // I
+                {x: -8, y: 0}, {x: -8, y: 1}, {x: -8, y: 2}, {x: -8, y: -1}, {x: -8, y: -2},
+                // 心形
+                {x: -2, y: 0.5}, {x: -1, y: 1.5}, {x: 0, y: 2}, {x: 1, y: 1.5}, {x: 2, y: 0.5},
+                {x: -2, y: -0.5}, {x: -1, y: 0}, {x: 0, y: -0.5}, {x: 1, y: 0}, {x: 2, y: -0.5},
+                {x: -1, y: -1.5}, {x: 0, y: -2}, {x: 1, y: -1.5},
+                // U
+                {x: 6, y: 2}, {x: 5, y: 2}, {x: 4, y: 1}, {x: 4, y: 0}, {x: 4, y: -1},
+                {x: 4, y: -2}, {x: 5, y: -2}, {x: 6, y: -2}, {x: 7, y: -1}, {x: 7, y: 0},
+                {x: 7, y: 1}, {x: 6, y: 2}
+            ];
+            
+            // 创建心形粒子
+            for (const point of loveText) {
+                const particle = createParticle(point.x, point.y, 0);
+                
+                // 心形特殊颜色
+                if (point.x >= -2 && point.x <= 2 && point.y >= -2 && point.y <= 2) {
+                    particle.material.color.setHSL(0.95, 1, 0.7);
+                    particle.material.emissive.setHSL(0.95, 1, 0.2);
+                }
+                
+                // 随机起始位置
+                particle.position.x += (Math.random() - 0.5) * 30;
+                particle.position.y += (Math.random() - 0.5) * 30;
+                particle.position.z = (Math.random() - 0.5) * 20;
+                
+                // 爆炸效果
+                particle.velocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * 10,
+                    (Math.random() - 0.5) * 10,
+                    (Math.random() - 0.5) * 10
+                );
+            }
+        }
+        
+        // 创建气球
+        function createBalloons() {
+            const balloonColors = [
+                0xff0000, 0x00ff00, 0x0000ff, 0xffff00, 0xff00ff, 0x00ffff,
+                0xff8800, 0x8800ff, 0x0088ff, 0xff0088
+            ];
+            
+            for (let i = 0; i < 30; i++) {
+                // 气球主体
+                const geometry = new THREE.SphereGeometry(1, 32, 32);
+                const material = new THREE.MeshPhongMaterial({
+                    color: balloonColors[Math.floor(Math.random() * balloonColors.length)],
+                    shininess: 100
+                });
+                
+                const balloon = new THREE.Mesh(geometry, material);
+                
+                // 气球绳子
+                const ropeGeometry = new THREE.CylinderGeometry(0.02, 0.02, 3, 8);
+                const ropeMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+                const rope = new THREE.Mesh(ropeGeometry, ropeMaterial);
+                rope.position.y = -1.5;
+                
+                balloon.add(rope);
+                
+                // 随机位置
+                balloon.position.set(
+                    (Math.random() - 0.5) * 40,
+                    -20 + Math.random() * 10,
+                    (Math.random() - 0.5) * 20
+                );
+                
+                // 随机上升速度
+                balloon.riseSpeed = 0.5 + Math.random() * 1.5;
+                balloon.swingSpeed = 0.5 + Math.random();
+                balloon.swingAmount = 0.5 + Math.random();
+                
+                scene.add(balloon);
+                balloons.push(balloon);
+            }
+        }
+        
+        // 创建鲜花
+        function createFlowers() {
+            for (let i = 0; i < 20; i++) {
+                const flowerGroup = new THREE.Group();
+                
+                // 花蕊
+                const centerGeometry = new THREE.SphereGeometry(0.3, 16, 16);
+                const centerMaterial = new THREE.MeshPhongMaterial({ color: 0xffff00 });
+                const center = new THREE.Mesh(centerGeometry, centerMaterial);
+                flowerGroup.add(center);
+                
+                // 花瓣
+                const petalCount = 5 + Math.floor(Math.random() * 4);
+                for (let j = 0; j < petalCount; j++) {
+                    const angle = (j / petalCount) * Math.PI * 2;
+                    
+                    const petalGeometry = new THREE.SphereGeometry(0.5, 16, 16);
+                    petalGeometry.scale(1, 0.3, 0.3);
+                    
+                    const petalMaterial = new THREE.MeshPhongMaterial({
+                        color: new THREE.Color(`hsl(${Math.random() * 60 + 300}, 100%, 70%)`)
+                    });
+                    
+                    const petal = new THREE.Mesh(petalGeometry, petalMaterial);
+                    petal.position.x = Math.cos(angle) * 1;
+                    petal.position.z = Math.sin(angle) * 1;
+                    
+                    flowerGroup.add(petal);
+                }
+                
+                // 花茎
+                const stemGeometry = new THREE.CylinderGeometry(0.05, 0.05, 3, 8);
+                const stemMaterial = new THREE.MeshPhongMaterial({ color: 0x00aa00 });
+                const stem = new THREE.Mesh(stemGeometry, stemMaterial);
+                stem.position.y = -1.5;
+                flowerGroup.add(stem);
+                
+                // 随机位置
+                flowerGroup.position.set(
+                    (Math.random() - 0.5) * 40,
+                    -20 + Math.random() * 10,
+                    (Math.random() - 0.5) * 20
+                );
+                
+                // 随机旋转
+                flowerGroup.rotation.y = Math.random() * Math.PI * 2;
+                
+                // 上升和旋转动画属性
+                flowerGroup.riseSpeed = 0.3 + Math.random() * 0.7;
+                flowerGroup.rotationSpeed = (Math.random() - 0.5) * 0.02;
+                
+                scene.add(flowerGroup);
+                flowers.push(flowerGroup);
+            }
+        }
+        
+        // 清除所有粒子
+        function clearParticles() {
+            particles.forEach(particle => {
+                scene.remove(particle);
+                if (particle.geometry) particle.geometry.dispose();
+                if (particle.material) particle.material.dispose();
+            });
+            
+            particles = [];
+            currentParticleNumber = 0;
+        }
+        
+        // 清除所有物体
+        function clearAll() {
+            clearParticles();
+            
+            // 清除气球
+            balloons.forEach(balloon => {
+                scene.remove(balloon);
+                balloon.traverse(child => {
+                    if (child.geometry) child.geometry.dispose();
+                    if (child.material) child.material.dispose();
+                });
+            });
+            balloons = [];
+            
+            // 清除鲜花
+            flowers.forEach(flower => {
+                scene.remove(flower);
+                flower.traverse(child => {
+                    if (child.geometry) child.geometry.dispose();
+                    if (child.material) child.material.dispose();
+                });
+            });
+            flowers = [];
+            
+            // 清除粒子系统
+            particleSystems.forEach(system => {
+                scene.remove(system);
+            });
+            particleSystems = [];
+        }
+        
+        // 初始化MediaPipe Hands
+        function initMediaPipe() {
+            // 初始化摄像头
+            const videoElement = document.getElementById('inputVideo');
+            
+            // 创建MediaPipe Hands实例
+            hands = new Hands({
+                locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`;
+                }
+            });
+            
+            // 配置参数
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+            
+            // 设置结果回调
+            hands.onResults(onHandResults);
+            
+            // 启动摄像头
+            const camera = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 200,
+                height: 150
+            });
+            
+            camera.start();
+        }
+        
+        // 处理手势识别结果
+        function onHandResults(results) {
+            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+                if (gestureDetected) {
+                    gestureDetected = false;
+                    document.getElementById('gestureText').textContent = "未检测到手势";
+                }
+                return;
+            }
+            
+            // 获取手部关键点
+            const landmarks = results.multiHandLandmarks[0];
+            
+            // 计算伸出的手指数量
+            const fingersUp = countFingers(landmarks);
+            
+            // 更新手势文本
+            document.getElementById('gestureText').textContent = `检测到${fingersUp}根手指`;
+            
+            // 根据手指数量执行相应操作
+            if (fingersUp === 1 || fingersUp === 2 || fingersUp === 3) {
+                if (currentParticleNumber !== fingersUp) {
+                    createParticleNumber(fingersUp);
+                }
+            } else if (fingersUp === 5) {
+                // 五指张开 - 触发告白特效
+                createLoveEffect();
+            } else if (fingersUp === 0) {
+                // 握拳 - 清除所有特效
+                clearAll();
+            }
+            
+            gestureDetected = true;
+        }
+        
+        // 计算伸出的手指数量
+        function countFingers(landmarks) {
+            // 手指指尖索引
+            const fingerTips = [4, 8, 12, 16, 20];
+            // 手指根部索引（除了大拇指）
+            const fingerPips = [2, 6, 10, 14, 18];
+            
+            let count = 0;
+            
+            // 检查大拇指
+            if (landmarks[4].x < landmarks[2].x) {
+                count++;
+            }
+            
+            // 检查其他四指
+            for (let i = 1; i < 5; i++) {
+                if (landmarks[fingerTips[i]].y < landmarks[fingerPips[i]].y) {
+                    count++;
+                }
+            }
+            
+            return count;
+        }
+        
+        // 动画循环
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // 更新粒子
+            particles.forEach(particle => {
+                if (particle.velocity) {
+                    particle.position.add(particle.velocity);
+                    particle.velocity.multiplyScalar(0.98); // 阻尼
+                    
+                    // 边界检查
+                    if (particle.position.length() > 50) {
+                        particle.velocity.multiplyScalar(-0.5);
+                    }
+                    
+                    // 轻微浮动
+                    particle.position.y += Math.sin(Date.now() * 0.001 + particle.position.x) * 0.005;
+                }
+            });
+            
+            // 更新气球
+            balloons.forEach(balloon => {
+                // 上升
+                balloon.position.y += balloon.riseSpeed * 0.1;
+                
+                // 左右摆动
+                balloon.position.x += Math.sin(Date.now() * 0.001 * balloon.swingSpeed) * balloon.swingAmount * 0.05;
+                
+                // 旋转
+                balloon.rotation.y += 0.01;
+                
+                // 如果气球超出视野，重置到底部
+                if (balloon.position.y > 30) {
+                    balloon.position.y = -20;
+                    balloon.position.x = (Math.random() - 0.5) * 40;
+                    balloon.position.z = (Math.random() - 0.5) * 20;
+                }
+            });
+            
+            // 更新鲜花
+            flowers.forEach(flower => {
+                // 上升
+                flower.position.y += flower.riseSpeed * 0.1;
+                
+                // 旋转
+                flower.rotation.y += flower.rotationSpeed;
+                
+                // 轻微摆动
+                flower.rotation.x = Math.sin(Date.now() * 0.001 + flower.position.x) * 0.1;
+                
+                // 如果鲜花超出视野，重置到底部
+                if (flower.position.y > 30) {
+                    flower.position.y = -20;
+                    flower.position.x = (Math.random() - 0.5) * 40;
+                    flower.position.z = (Math.random() - 0.5) * 20;
+                }
+            });
+            
+            // 渲染场景
+            renderer.render(scene, camera);
+        }
+        
+        // 全屏功能
+        function initFullscreenButton() {
+            const fullscreenBtn = document.getElementById('fullscreenBtn');
+            
+            fullscreenBtn.addEventListener('click', () => {
+                if (!document.fullscreenElement) {
+                    document.documentElement.requestFullscreen().catch(err => {
+                        console.error(`全屏请求失败: ${err.message}`);
+                    });
+                } else {
+                    if (document.exitFullscreen) {
+                        document.exitFullscreen();
+                    }
+                }
+            });
+            
+            // 监听全屏变化
+            document.addEventListener('fullscreenchange', () => {
+                if (document.fullscreenElement) {
+                    fullscreenBtn.textContent = '⛶';
+                    fullscreenBtn.title = '退出全屏';
+                } else {
+                    fullscreenBtn.textContent = '⛶';
+                    fullscreenBtn.title = '全屏模式';
+                }
+            });
+        }
+        
+        // 初始化应用
+        function init() {
+            initThreeJS();
+            initMediaPipe();
+            initFullscreenButton();
+            animate();
+            
+            // 显示欢迎信息
+            setTimeout(() => {
+                document.getElementById('gestureText').textContent = "伸出手指开始体验魔法";
+            }, 2000);
+        }
+        
+        // 启动应用
+        window.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
